@@ -1,9 +1,11 @@
 -- ============================================================
---  ESP | Obsidian (full: Players, Tools, Prompts, Monsters, Doors)
+--  ESP | Obsidian (категории + Doors + Entity + Paths + World)
 -- ============================================================
 local Players            = game:GetService("Players")
 local RunService         = game:GetService("RunService")
-local ProximityPromptService = game:GetService("ProximityPromptService")
+local Lighting           = game:GetService("Lighting")
+local ReplicatedStorage  = game:GetService("ReplicatedStorage")
+local PathfindingService = game:GetService("PathfindingService")
 local player             = Players.LocalPlayer
 
 local ESP = {}
@@ -11,780 +13,679 @@ local ESP = {}
 local Hub, Config, Group
 local connections = {}
 
--- Хранилища
-local espObjects        = {}  -- [Player] = {highlight, billboard}
-local toolEspObjects    = {}  -- [Tool] = {highlight, billboard, nameLabel}
-local promptEspObjects  = {}  -- [Target] = {highlight, billboard, nameLabel, promptLabel, distLabel, prompt}
-local monsterEspObjects = {}  -- [Target] = {highlight, billboard, nameLabel, distLabel}
-local doorESPObjects    = {}  -- [DoorModel] = {highlight, billboard, wrapper, weld}
-local savedPrompts      = {}  -- [ProximityPrompt] = saved settings (instant)
+local CurrentRooms = workspace:FindFirstChild("CurrentRooms")
+local FloorReplicated = ReplicatedStorage:FindFirstChild("FloorReplicated")
+local GameData = ReplicatedStorage:FindFirstChild("GameData")
+
+local Floor
+if GameData then
+    local f = GameData:FindFirstChild("Floor")
+    if f then Floor = f.Value end
+end
 
 local function track(c) table.insert(connections, c) return c end
 
-local function getPlayerPos()
-    local char = player.Character
-    if not char then return nil end
-    local root = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChildWhichIsA("BasePart")
-    return root and root.Position
-end
-
-local function getModelPart(target)
-    if not target then return nil end
-    if target:IsA("Model") then
-        return target.PrimaryPart or target:FindFirstChildWhichIsA("BasePart")
-    elseif target:IsA("BasePart") then
-        return target
-    end
-    return nil
-end
-
 -- ============================================================
---  ESP PLAYERS
+--  ESP КАТЕГОРИИ (Keys, Doors, Items, Books, Misc, Objectives, HidingSpots, Chests, Currency, Ladders)
 -- ============================================================
-local function createESP(targetPlayer)
-    if targetPlayer == player or espObjects[targetPlayer] then return end
-    local char = targetPlayer.Character
-    if not char then return end
+local ESP_CATEGORIES = {
+    Keys = {
+        Color = Color3.fromRGB(0, 255, 255),
+        Names = { KeyObtain = true, ElectricalKeyObtain = true },
+        Labels = { KeyObtain = "Door Key", ElectricalKeyObtain = "Electrical Key" },
+    },
+    Doors = { Color = Color3.fromRGB(0, 255, 0), Names = { Door = true } },
+    Items = {
+        Color = Color3.fromRGB(255, 255, 255),
+        Names = { Vitamins = true, Lighter = true, Flashlight = true, Lockpick = true, SkeletonKey = true, Shears = true, Bandage = true, Crucifix = true },
+        Labels = { Vitamins = "Vitamins", Lighter = "Lighter", Flashlight = "Flashlight", Lockpick = "Lockpicks", SkeletonKey = "Skeleton Key", Shears = "Shears", Bandage = "Bandage", Crucifix = "Crucifix" },
+    },
+    Books = { Color = Color3.fromRGB(255, 100, 150), Names = { LiveHintBook = true }, Labels = { LiveHintBook = "Hint Book" } },
+    Misc = { Color = Color3.fromRGB(0, 100, 0), Names = { LeverForGate = true }, Labels = { LeverForGate = "Gate Lever" } },
+    Objectives = {
+        Color = Color3.fromRGB(0, 255, 0),
+        Names = {
+            MinesGenerator = true, FuseObtain = true, LiveBreakerPolePickup = true,
+            LibraryHintPaper = true, CringlePresent = true, MinesGateButton = true,
+            GardenGateButton = true, TimerLever = true, MinesAnchor = true,
+            WaterPump = true, VineGuillotine = true,
+        },
+        Labels = {
+            MinesGenerator = "Generator", FuseObtain = "Generator Fuse",
+            LiveBreakerPolePickup = "Fuse Breaker", LibraryHintPaper = "Hint Paper",
+            CringlePresent = "Present", MinesGateButton = "Gate Button",
+            GardenGateButton = "Gate Button", WaterPump = "Water Pump", VineGuillotine = "Vine Lever",
+        },
+    },
+    HidingSpots = {
+        Color = Color3.fromRGB(255, 170, 0),
+        Names = {
+            Wardrobe = true, ["Backdoor_Wardrobe"] = true, Toolshed = true,
+            RetroWardrobe = true, ["Wardrobe-FOOLS26"] = true, Locker_Large = true,
+            Rooms_Locker = true, Rooms_Locker_Fridge = true,
+            Bed = true, Double_Bed = true, DoubleBed = true,
+            CircularVent = true, Dumpster = true,
+        },
+        Labels = {
+            Wardrobe = "Closet", ["Backdoor_Wardrobe"] = "Closet", Toolshed = "Closet",
+            RetroWardrobe = "Closet", ["Wardrobe-FOOLS26"] = "Closet", Locker_Large = "Locker",
+            Rooms_Locker = "Locker", Rooms_Locker_Fridge = "Locker",
+            Bed = "Bed", Double_Bed = "Double Bed", DoubleBed = "Double Bed",
+            CircularVent = "Vent", Dumpster = "Dumpster",
+        },
+    },
+    Chests = {
+        Color = Color3.fromRGB(255, 255, 0),
+        Names = {
+            ChestBox = true, ChestBoxLocked = true, Toolbox = true, Toolbox_Locked = true,
+            Chest_Vine = true, Toolshed_Small = true, Locker_Small_Locked = true, MouseHole = true,
+        },
+        Labels = {
+            ChestBox = "Chest", ChestBoxLocked = "Locked Chest", Toolbox = "Toolbox",
+            Toolbox_Locked = "Locked Toolbox", Chest_Vine = "Vine Chest", Toolshed_Small = "Toolshed",
+            Locker_Small_Locked = "Locked Item Locker", MouseHole = "Mouse",
+        },
+    },
+    Currency = {
+        Color = Color3.fromRGB(255, 255, 0),
+        Names = { GoldPile = true, StardustPickup = true },
+        Labels = { GoldPile = "Gold Pile", StardustPickup = "Stardust Pile" },
+    },
+    Ladders = { Color = Color3.fromRGB(255, 255, 255), Names = { Ladder = true }, Labels = { Ladder = "Ladder" } },
+}
 
-    local hl = Instance.new("Highlight")
-    hl.Name = "ESP_Highlight"
-    hl.FillColor = Color3.fromRGB(255, 0, 0)
-    hl.OutlineColor = Color3.fromRGB(255, 255, 255)
-    hl.FillTransparency = 0.5
-    hl.OutlineTransparency = 0
-    hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-    hl.Adornee = char
-    hl.Parent = char
-
-    local bb = Instance.new("BillboardGui")
-    bb.Name = "ESP_Billboard"
-    bb.Size = UDim2.new(0, 200, 0, 30)
-    bb.StudsOffset = Vector3.new(0, 3, 0)
-    bb.AlwaysOnTop = true
-    bb.Adornee = char:FindFirstChild("Head") or char:FindFirstChildWhichIsA("BasePart")
-    bb.Parent = char
-
-    local nl = Instance.new("TextLabel")
-    nl.Size = UDim2.new(1, 0, 0, 20)
-    nl.BackgroundTransparency = 1
-    nl.Text = targetPlayer.Name
-    nl.TextColor3 = Color3.fromRGB(255, 255, 255)
-    nl.TextStrokeTransparency = 0
-    nl.Font = Enum.Font.GothamBold
-    nl.TextSize = 14
-    nl.Parent = bb
-
-    espObjects[targetPlayer] = { highlight = hl, billboard = bb }
+local NameToCategory = {}
+for cat, data in pairs(ESP_CATEGORIES) do
+    data.Enabled = false
+    data.Objects = {}
+    for name in pairs(data.Names) do NameToCategory[name] = cat end
 end
 
-local function removeESP(targetPlayer)
-    local d = espObjects[targetPlayer]
-    if d then
-        if d.highlight then d.highlight:Destroy() end
-        if d.billboard then d.billboard:Destroy() end
-        espObjects[targetPlayer] = nil
-    end
+local function removeESP(category, instance)
+    local data = ESP_CATEGORIES[category]
+    local entry = data.Objects[instance]
+    if not entry then return end
+    data.Objects[instance] = nil
+    pcall(function() entry.Conn:Disconnect() end)
+    pcall(function() entry.Highlight:Destroy() end)
+    if entry.Bill then pcall(function() entry.Bill:Destroy() end) end
 end
 
-local function clearAllESP()
-    for p in pairs(espObjects) do removeESP(p) end
-end
+local function addESP(category, instance, label)
+    local data = ESP_CATEGORIES[category]
+    if data.Objects[instance] then return end
+    local highlight = Instance.new("Highlight")
+    highlight.Name = "ObsidianESP_" .. category
+    highlight.Adornee = instance
+    highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    highlight.FillColor = data.Color
+    highlight.OutlineColor = data.Color
+    highlight.FillTransparency = 1
+    highlight.OutlineTransparency = 0
+    highlight.Parent = workspace
 
-local function watchPlayer(p)
-    track(p.CharacterAdded:Connect(function()
-        if Hub.Toggles.espPlayers and Hub.Toggles.espPlayers.Value then
-            removeESP(p)
-            task.wait(0.5)
-            createESP(p)
-        end
-    end))
-end
-
--- ============================================================
---  ESP TOOLS
--- ============================================================
-local function createToolESP(tool)
-    if toolEspObjects[tool] or not tool:IsA("Tool") then return end
-    local isDoor  = tool.Name:sub(1, 4) == "Door"
-    local isLever = tool.Name:sub(1, 5) == "Lever" or tool.Name == "LeverToGate"
-    local hlColor, textColor
-    if isDoor then hlColor, textColor = Config.DOOR_COLOR, Config.DOOR_COLOR
-    elseif isLever then hlColor, textColor = Config.LEVER_COLOR, Config.LEVER_COLOR
-    else hlColor, textColor = Config.TOOL_COLOR, Config.TOOL_COLOR end
-
-    local hl = Instance.new("Highlight")
-    hl.Name = "ToolESP_Highlight"
-    hl.FillColor = hlColor
-    hl.OutlineColor = Color3.fromRGB(255, 255, 255)
-    hl.FillTransparency = 0.4
-    hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-    hl.Adornee = tool
-    hl.Parent = tool
-
-    local bb = Instance.new("BillboardGui")
-    bb.Name = "ToolESP_Billboard"
-    bb.Size = UDim2.new(0, 180, 0, 22)
-    bb.StudsOffset = Vector3.new(0, 1.5, 0)
-    bb.AlwaysOnTop = true
-    bb.Parent = tool
-    local ap = tool:FindFirstChildWhichIsA("BasePart")
-    bb.Adornee = ap or tool
-
-    local nl = Instance.new("TextLabel")
-    nl.Size = UDim2.new(1, 0, 1, 0)
-    nl.BackgroundTransparency = 1
-    nl.Text = tool.Name
-    nl.TextColor3 = textColor
-    nl.TextStrokeTransparency = 0
-    nl.Font = Enum.Font.GothamBold
-    nl.TextSize = 14
-    nl.Parent = bb
-
-    toolEspObjects[tool] = { highlight = hl, billboard = bb, nameLabel = nl }
-end
-
-local function removeToolESP(tool)
-    local d = toolEspObjects[tool]
-    if d then
-        if d.highlight then d.highlight:Destroy() end
-        if d.billboard then d.billboard:Destroy() end
-        toolEspObjects[tool] = nil
-    end
-end
-
-local function clearAllToolESP()
-    for t in pairs(toolEspObjects) do removeToolESP(t) end
-end
-
-local function scanTools()
-    for _, obj in ipairs(workspace:GetDescendants()) do
-        if obj:IsA("Tool") then
-            if Hub.Toggles.espTools and Hub.Toggles.espTools.Value then createToolESP(obj) else removeToolESP(obj) end
+    local bill
+    if label then
+        local part = instance.PrimaryPart or (instance:IsA("BasePart") and instance) or instance:FindFirstChildWhichIsA("BasePart")
+        if part then
+            bill = Instance.new("BillboardGui")
+            bill.Name = "ObsidianESP_Bill_" .. category
+            bill.Adornee = part
+            bill.Size = UDim2.new(0, 150, 0, 25)
+            bill.StudsOffset = Vector3.new(0, 2, 0)
+            bill.AlwaysOnTop = true
+            bill.MaxDistance = 500
+            bill.LightInfluence = 0
+            local text = Instance.new("TextLabel")
+            text.BackgroundTransparency = 1
+            text.Size = UDim2.new(1, 0, 1, 0)
+            text.Font = Enum.Font.GothamBold
+            text.Text = label
+            text.TextColor3 = data.Color
+            text.TextStrokeTransparency = 0
+            text.TextStrokeColor3 = Color3.new(0, 0, 0)
+            text.TextSize = 14
+            text.Parent = bill
+            bill.Parent = workspace
         end
     end
-    for _, p in ipairs(Players:GetPlayers()) do
-        local char = p.Character
-        if char then
-            for _, obj in ipairs(char:GetChildren()) do
-                if obj:IsA("Tool") then
-                    if Hub.Toggles.espTools and Hub.Toggles.espTools.Value then createToolESP(obj) else removeToolESP(obj) end
-                end
+
+    local conn = instance.AncestryChanged:Connect(function()
+        if not instance:IsDescendantOf(workspace) then removeESP(category, instance) end
+    end)
+    data.Objects[instance] = { Highlight = highlight, Conn = conn, Bill = bill }
+end
+
+local function isBookInBookcase(obj)
+    if obj.Name ~= "LiveHintBook" then return false end
+    return obj:FindFirstAncestor("Bookcase") ~= nil
+end
+
+local function getESPTarget(category, obj)
+    if category == "Books" and isBookInBookcase(obj) then return nil, nil end
+
+    if obj.Name == "WaterPump" then return obj:FindFirstChild("Wheel"), "Water Pump" end
+    if obj.Name == "VineGuillotine" then return obj:FindFirstChild("Lever"), "Vine Lever" end
+    if obj.Name == "TimerLever" then
+        local lbl = "Time Lever"
+        local t = obj:FindFirstChild("TakeTimer")
+        if t and t:IsA("TextLabel") then lbl = "Time Lever [" .. t.Text .. "]" end
+        return obj, lbl
+    end
+    if obj.Name == "MinesAnchor" then
+        local sign = obj:FindFirstChild("Sign")
+        if sign and sign:FindFirstChild("TextLabel") then
+            return obj, "Anchor [" .. sign.TextLabel.Text .. "]"
+        end
+        return obj, "Anchor"
+    end
+    if obj.Name == "GoldPile" then
+        local val = obj:GetAttribute("GoldValue")
+        return obj, val and ("Gold Pile [" .. val .. "]") or "Gold Pile"
+    end
+    if ESP_CATEGORIES[category].Labels and ESP_CATEGORIES[category].Labels[obj.Name] then
+        return obj, ESP_CATEGORIES[category].Labels[obj.Name]
+    end
+    return obj, nil
+end
+
+local function setESPCategory(category, enabled)
+    local data = ESP_CATEGORIES[category]
+    data.Enabled = enabled
+    if enabled then
+        for _, obj in ipairs(workspace:GetDescendants()) do
+            if data.Names[obj.Name] and (obj:IsA("Model") or obj:IsA("BasePart")) then
+                local target, label = getESPTarget(category, obj)
+                if target then addESP(category, target, label) end
             end
         end
-        local bp = p:FindFirstChildOfClass("Backpack")
-        if bp then
-            for _, obj in ipairs(bp:GetChildren()) do
-                if obj:IsA("Tool") then
-                    if Hub.Toggles.espTools and Hub.Toggles.espTools.Value then createToolESP(obj) else removeToolESP(obj) end
-                end
-            end
-        end
-    end
-end
-
--- ============================================================
---  ESP PROMPTS
--- ============================================================
-local function isPromptBlacklisted(target)
-    if not target then return false end
-    local name = target.Name
-    if Config.PROMPT_BLACKLIST[name] then return true end
-    for blocked in pairs(Config.PROMPT_BLACKLIST) do
-        if string.find(string.lower(name), string.lower(blocked), 1, true) then return true end
-    end
-    return false
-end
-
-local function isPromptBlueListed(target)
-    if not target then return false end
-    local name = string.lower(target.Name)
-    for blue in pairs(Config.PROMPT_BLUELIST) do
-        if string.sub(name, 1, #blue) == string.lower(blue) then return true end
-    end
-    return false
-end
-
-local function getPromptTarget(prompt)
-    local parent = prompt.Parent
-    if not parent then return nil end
-    if parent:IsA("Model") then return parent end
-    if parent:IsA("BasePart") then
-        return parent:FindFirstAncestorOfClass("Model") or parent
-    end
-    return nil
-end
-
-local function createPromptESP(prompt)
-    local target = getPromptTarget(prompt)
-    if not target or promptEspObjects[target] then return end
-    if target == player.Character or isPromptBlacklisted(target) then return end
-
-    local isDoor  = target.Name:sub(1, 4) == "Door"
-    local isLever = target.Name:sub(1, 5) == "Lever" or target.Name == "LeverToGate"
-    local isBlue  = isPromptBlueListed(target)
-    local fc, tc
-    if isDoor then fc, tc = Config.DOOR_COLOR, Config.DOOR_COLOR
-    elseif isLever then fc, tc = Config.LEVER_COLOR, Config.LEVER_COLOR
-    elseif isBlue then fc, tc = Config.KEY_COLOR, Config.KEY_COLOR
-    else fc, tc = Config.PROMPT_COLOR, Config.PROMPT_COLOR end
-
-    local hl = Instance.new("Highlight")
-    hl.Name = "PromptESP_Highlight"
-    hl.FillColor = fc
-    hl.OutlineColor = Color3.fromRGB(255, 255, 255)
-    hl.FillTransparency = 0.5
-    hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-    hl.Adornee = target
-    hl.Parent = target
-
-    local bb = Instance.new("BillboardGui")
-    bb.Name = "PromptESP_Billboard"
-    bb.Size = UDim2.new(0, 220, 0, 58)
-    bb.StudsOffset = Vector3.new(0, 2.5, 0)
-    bb.AlwaysOnTop = true
-    local ap = getModelPart(target)
-    bb.Adornee = ap or target
-    bb.Parent = ap or target
-
-    local nl = Instance.new("TextLabel")
-    nl.Size = UDim2.new(1, 0, 0, 18)
-    nl.BackgroundTransparency = 1
-    nl.Text = target.Name
-    nl.TextColor3 = tc
-    nl.TextStrokeTransparency = 0
-    nl.Font = Enum.Font.GothamBold
-    nl.TextSize = 14
-    nl.Parent = bb
-
-    local pl = Instance.new("TextLabel")
-    pl.Size = UDim2.new(1, 0, 0, 16)
-    pl.Position = UDim2.new(0, 0, 0, 18)
-    pl.BackgroundTransparency = 1
-    pl.Text = prompt.ActionText ~= "" and prompt.ActionText or "Interact"
-    pl.TextColor3 = Color3.fromRGB(255, 255, 255)
-    pl.TextStrokeTransparency = 0
-    pl.Font = Enum.Font.Gotham
-    pl.TextSize = 12
-    pl.Parent = bb
-
-    local dl = Instance.new("TextLabel")
-    dl.Size = UDim2.new(1, 0, 0, 16)
-    dl.Position = UDim2.new(0, 0, 0, 34)
-    dl.BackgroundTransparency = 1
-    dl.Text = "[0 studs]"
-    dl.TextColor3 = Color3.fromRGB(180, 255, 180)
-    dl.TextStrokeTransparency = 0
-    dl.Font = Enum.Font.GothamBold
-    dl.TextSize = 12
-    dl.Parent = bb
-
-    promptEspObjects[target] = {
-        highlight = hl, billboard = bb, nameLabel = nl,
-        promptLabel = pl, distLabel = dl, prompt = prompt,
-    }
-end
-
-local function removePromptESP(target)
-    local d = promptEspObjects[target]
-    if d then
-        if d.highlight then d.highlight:Destroy() end
-        if d.billboard then d.billboard:Destroy() end
-        promptEspObjects[target] = nil
-    end
-end
-
-local function clearAllPromptESP()
-    for t in pairs(promptEspObjects) do removePromptESP(t) end
-end
-
-local function scanPrompts()
-    for _, obj in ipairs(workspace:GetDescendants()) do
-        if obj:IsA("ProximityPrompt") then
-            local target = getPromptTarget(obj)
-            if target then
-                if Hub.Toggles.espPrompts and Hub.Toggles.espPrompts.Value and not isPromptBlacklisted(target) then
-                    createPromptESP(obj)
-                else
-                    removePromptESP(target)
-                end
-            end
-        end
-    end
-end
-
--- ============================================================
---  ESP MONSTERS
--- ============================================================
-local function isBlacklistedMonster(t)
-    if not t then return false end
-    local n = string.lower(t.Name)
-    for b in pairs(Config.MONSTER_BLACKLIST) do
-        if string.find(n, string.lower(b), 1, true) then return true end
-    end
-    return false
-end
-
-local function isPlayerChar(t)
-    if not t or not t:IsA("Model") then return false end
-    return Players:GetPlayerFromCharacter(t) ~= nil
-end
-
-local function isMonster(t)
-    if not t or isBlacklistedMonster(t) then return false end
-    local n = string.lower(t.Name)
-    for _, p in ipairs(Config.MONSTER_PREFIXES) do
-        if string.sub(n, 1, #p) == string.lower(p) then return true end
-    end
-    return false
-end
-
-local function isRig(t)
-    if not t or not t:IsA("Model") then return false end
-    if isPlayerChar(t) or isMonster(t) or isBlacklistedMonster(t) then return false end
-    if not t:FindFirstChildOfClass("Humanoid") then return false end
-    if not t:FindFirstChild("HumanoidRootPart") then return false end
-    return true
-end
-
-local function shouldMonster(t)
-    if isPlayerChar(t) or isBlacklistedMonster(t) then return false end
-    return isMonster(t) or isRig(t)
-end
-
-local function createMonsterESP(target)
-    if monsterEspObjects[target] or not shouldMonster(target) then return end
-    local fc, oc, tc
-    if isMonster(target) then
-        fc, oc, tc = Color3.fromRGB(255, 0, 0), Color3.fromRGB(255, 100, 100), Color3.fromRGB(255, 50, 50)
     else
-        fc, oc, tc = Color3.fromRGB(255, 140, 0), Color3.fromRGB(255, 200, 100), Color3.fromRGB(255, 180, 60)
-    end
-
-    local hl = Instance.new("Highlight")
-    hl.Name = "MonsterESP_Highlight"
-    hl.FillColor = fc
-    hl.OutlineColor = oc
-    hl.FillTransparency = 0.4
-    hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-    hl.Adornee = target
-    hl.Parent = target
-
-    local bb = Instance.new("BillboardGui")
-    bb.Name = "MonsterESP_Billboard"
-    bb.Size = UDim2.new(0, 220, 0, 40)
-    bb.StudsOffset = Vector3.new(0, 3, 0)
-    bb.AlwaysOnTop = true
-    local ap = getModelPart(target)
-    bb.Adornee = ap or target
-    bb.Parent = ap or target
-
-    local nl = Instance.new("TextLabel")
-    nl.Size = UDim2.new(1, 0, 0, 20)
-    nl.BackgroundTransparency = 1
-    nl.Text = (isMonster(target) and "⚠ " or "[Rig] ") .. target.Name .. (isMonster(target) and " ⚠" or "")
-    nl.TextColor3 = tc
-    nl.TextStrokeTransparency = 0
-    nl.Font = Enum.Font.GothamBold
-    nl.TextSize = 16
-    nl.Parent = bb
-
-    local dl = Instance.new("TextLabel")
-    dl.Size = UDim2.new(1, 0, 0, 16)
-    dl.Position = UDim2.new(0, 0, 0, 20)
-    dl.BackgroundTransparency = 1
-    dl.Text = "[0 studs]"
-    dl.TextColor3 = Color3.fromRGB(255, 220, 180)
-    dl.TextStrokeTransparency = 0
-    dl.Font = Enum.Font.GothamBold
-    dl.TextSize = 12
-    dl.Parent = bb
-
-    monsterEspObjects[target] = { highlight = hl, billboard = bb, nameLabel = nl, distLabel = dl }
-end
-
-local function removeMonsterESP(target)
-    local d = monsterEspObjects[target]
-    if d then
-        if d.highlight then d.highlight:Destroy() end
-        if d.billboard then d.billboard:Destroy() end
-        monsterEspObjects[target] = nil
+        for instance in pairs(data.Objects) do removeESP(category, instance) end
     end
 end
 
-local function clearAllMonsterESP()
-    for t in pairs(monsterEspObjects) do removeMonsterESP(t) end
+track(workspace.DescendantAdded:Connect(function(obj)
+    local category = NameToCategory[obj.Name]
+    if category and ESP_CATEGORIES[category].Enabled and (obj:IsA("Model") or obj:IsA("BasePart")) then
+        task.defer(function()
+            if not ESP_CATEGORIES[category].Enabled or not obj:IsDescendantOf(workspace) then return end
+            local target, label = getESPTarget(category, obj)
+            if target then addESP(category, target, label) end
+        end)
+    end
+end))
+
+-- ============================================================
+--  PLAYER ESP
+-- ============================================================
+local playerESPEnabled = false
+local playerHighlights = {}
+
+local function addPlayerESP(char)
+    if not char or playerHighlights[char] then return end
+    local h = Instance.new("Highlight")
+    h.Name = "ObsidianESP_Player"
+    h.Adornee = char
+    h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    h.FillColor = Color3.fromRGB(255, 255, 255)
+    h.OutlineColor = Color3.fromRGB(255, 255, 255)
+    h.FillTransparency = 0.7
+    h.OutlineTransparency = 0
+    h.Parent = workspace
+    playerHighlights[char] = h
 end
 
-local function scanMonsters()
-    for _, obj in ipairs(workspace:GetDescendants()) do
-        if shouldMonster(obj) then
-            if Hub.Toggles.espMonsters and Hub.Toggles.espMonsters.Value then createMonsterESP(obj)
-            else removeMonsterESP(obj) end
+local function setPlayerESP(state)
+    playerESPEnabled = state
+    if state then
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if plr ~= player then
+                if plr.Character then addPlayerESP(plr.Character) end
+                track(plr.CharacterAdded:Connect(function(c) task.wait(0.5) if playerESPEnabled then addPlayerESP(c) end end))
+            end
         end
+    else
+        for _, h in pairs(playerHighlights) do pcall(function() h:Destroy() end) end
+        table.clear(playerHighlights)
     end
 end
 
+track(Players.PlayerAdded:Connect(function(plr)
+    if plr == player then return end
+    track(plr.CharacterAdded:Connect(function(c) task.wait(0.5) if playerESPEnabled then addPlayerESP(c) end end))
+end))
+
 -- ============================================================
---  ESP DOORS (wrapper Part + Weld, как в Abysall)
+--  ENTITY ESP / NOTIFY
 -- ============================================================
-local function getDoorNumber(doorModel)
-    local num = tonumber(doorModel.Parent and doorModel.Parent.Name)
-        or tonumber(doorModel.Parent and doorModel.Parent.Parent and doorModel.Parent.Parent.Name)
-    if num then num = num + 1 end
-    local floor = nil
-    local gd = game:GetService("ReplicatedStorage"):FindFirstChild("GameData")
-    if gd then
-        local f = gd:FindFirstChild("Floor")
-        if f then floor = f.Value end
-    end
-    if num then
-        if floor == "Mines" then num = num + 100 end
-        if floor == "Backdoor" then num = num - 50 end
-    end
-    return tostring(num or "?")
+local Entities = {
+    ["RushMoving"] = { Alias = "Rush", NotifyMessage = { Title = "Entity 'Rush' has spawned.", Body = "Find a hiding spot." } },
+    ["AmbushMoving"] = { Alias = "Ambush", NotifyMessage = { Title = "Entity 'Ambush' has spawned.", Body = "Find a hiding spot." } },
+    ["Eyes"] = { Alias = "Eyes", NotifyMessage = { Title = "Entity 'Eyes' has spawned.", Body = "Avoid looking at it." } },
+    ["Lookman"] = { Alias = "Eyes", NotifyMessage = { Title = "Entity 'Eyes' has spawned.", Body = "Avoid looking at it." } },
+    ["BackdoorRush"] = { Alias = "Blitz", NotifyMessage = { Title = "Entity 'Blitz' has spawned.", Body = "Find a hiding spot." } },
+    ["BackdoorLookman"] = { Alias = "Lookman", NotifyMessage = { Title = "Entity 'Lookman' has spawned.", Body = "Avoid looking at its eyes." } },
+    ["Groundskeeper"] = { Alias = "Groundskeeper", NotifyMessage = { Title = "Entity 'Groundskeeper' has spawned.", Body = "Avoid stepping on the grass." } },
+    ["A60"] = { Alias = "A-60", NotifyMessage = { Title = "Entity 'A-60' has spawned.", Body = "Find a hiding spot." } },
+    ["A120"] = { Alias = "A-120", NotifyMessage = { Title = "Entity 'A-120' has spawned.", Body = "Find a hiding spot." } },
+    ["GloombatSwarm"] = { Alias = "Gloombat Swarm", NotifyMessage = { Title = "Entity 'Gloombat Swarm' has spawned.", Body = "Keep all light sources turned off." } },
+    ["GlitchRush"] = { Alias = "RNIUSHCG==", NotifyMessage = { Title = "Entity 'RNIUSHCG==' has spawned.", Body = "Find a hiding spot." } },
+    ["GlitchAmbush"] = { Alias = "AR0xMBUSH", NotifyMessage = { Title = "Entity 'AR0xMBUSH' has spawned.", Body = "Find a hiding spot." } },
+    ["MonumentEntity"] = { Alias = "Monument", NotifyMessage = { Title = "Entity 'Monument' has spawned.", Body = "It can't move while you are looking at it." } },
+    ["JeffTheKiller"] = { Alias = "Jeff the Killer", NotifyMessage = { Title = "Entity 'Jeff the Killer' has spawned.", Body = "Avoid touching him." } },
+    ["CustomEntity"] = { Alias = "Custom Entity", NotifyMessage = { Title = "Entity 'Custom Entity' has spawned.", Body = "Find a hiding spot." } },
+    ["FrozenAmbush"] = { Alias = "Frozen Ambush", NotifyMessage = { Title = "Entity 'Frozen Ambush' has spawned.", Body = "Find a hiding spot." } },
+    ["SallyMoving"] = { Alias = "Sally", NotifyMessage = { Title = "Entity 'Sally' has spawned.", Body = "Drop an item for her." } },
+}
+
+local EntityHighlights = {}
+local entityESPEnabled = false
+
+local function getEntityInfo(instance)
+    if not instance or not instance:IsA("Model") then return nil end
+    return Entities[instance.Name]
 end
 
-local function createDoorESP(doorModel)
-    if doorESPObjects[doorModel] then return end
-    if not doorModel:IsA("Model") then return end
-    local doorPart = doorModel:FindFirstChild("Door")
-    if not doorPart or not doorPart:IsA("BasePart") then return end
+local function hasAnyTrue(tbl)
+    if not tbl then return false end
+    for _, v in pairs(tbl) do if v == true then return true end end
+    return false
+end
 
-    local wrapper = Instance.new("Part")
-    wrapper.Name = "ObsidianDoorWrapper"
-    wrapper.Transparency = 0.999
-    wrapper.Size = doorPart.Size
-    wrapper.CFrame = doorPart.CFrame
-    wrapper.CanCollide = false
-    wrapper.CanTouch = false
-    wrapper.CanQuery = false
-    wrapper.Massless = true
-    wrapper.Anchored = false
-    wrapper.Parent = doorModel
+local function isInESPList(name)
+    local info = Entities[name] if not info then return false end
+    local opt = Hub.Options.EntityESPOptions
+    if not opt or not opt.Value then return true end
+    if not hasAnyTrue(opt.Value) then return true end
+    return opt.Value[info.Alias] == true
+end
 
-    local weld = Instance.new("WeldConstraint")
-    weld.Part0 = wrapper
-    weld.Part1 = doorPart
-    weld.Parent = wrapper
+local function isInNotifyList(name)
+    local info = Entities[name] if not info then return false end
+    local opt = Hub.Options.NotifyEntityList
+    if not opt or not opt.Value then return true end
+    if not hasAnyTrue(opt.Value) then return true end
+    return opt.Value[info.Alias] == true
+end
 
-    local hl = Instance.new("Highlight")
-    hl.Name = "ObsidianESP_Door"
-    hl.Adornee = wrapper
-    hl.FillColor = Config.DOOR_COLOR
-    hl.OutlineColor = Config.DOOR_COLOR
-    hl.FillTransparency = 1
-    hl.OutlineTransparency = 0
-    hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-    hl.Parent = workspace
+local function getEntityColor()
+    local ok, col = pcall(function() return Hub.Options.EntityESPColor.Value end)
+    if ok and typeof(col) == "Color3" then return col end
+    return Color3.fromRGB(255, 0, 0)
+end
+
+local function getModelPart(model)
+    if model.PrimaryPart then return model.PrimaryPart end
+    for _, part in ipairs(model:GetDescendants()) do
+        if part:IsA("BasePart") then return part end
+    end
+end
+
+local function removeEntityHighlight(instance)
+    local entry = EntityHighlights[instance]
+    if not entry then return end
+    EntityHighlights[instance] = nil
+    pcall(function() if entry.Conn then entry.Conn:Disconnect() end end)
+    pcall(function() if entry.Highlight then entry.Highlight:Destroy() end end)
+    pcall(function() if entry.Bill then entry.Bill:Destroy() end end)
+    pcall(function() if entry.Box then entry.Box:Destroy() end end)
+end
+
+local function addEntityHighlight(instance)
+    if EntityHighlights[instance] then return end
+    local info = getEntityInfo(instance)
+    if not info then return end
+    local color = getEntityColor()
+    local part = getModelPart(instance)
+    if not part then return end
+
+    local highlight = Instance.new("Highlight")
+    highlight.Name = "OldDoorsHub_EntityESP"
+    highlight.Adornee = instance
+    highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    highlight.FillColor = color
+    highlight.OutlineColor = color
+    highlight.FillTransparency = 0.5
+    highlight.OutlineTransparency = 0
+    highlight.Parent = workspace
+
+    local box = Instance.new("BoxHandleAdornment")
+    box.Name = "OldDoorsHub_EntityBox"
+    box.Adornee = part
+    box.AlwaysOnTop = true
+    box.ZIndex = 5
+    box.Size = part.Size
+    box.Transparency = 0.4
+    box.Color3 = color
+    box.Parent = workspace.CurrentCamera or workspace
 
     local bill = Instance.new("BillboardGui")
-    bill.Name = "ObsidianESP_DoorBill"
-    bill.Adornee = wrapper
-    bill.Size = UDim2.new(0, 150, 0, 25)
-    bill.StudsOffset = Vector3.new(0, 2, 0)
+    bill.Name = "OldDoorsHub_EntityBill"
+    bill.Adornee = part
+    bill.Size = UDim2.new(0, 200, 0, 40)
+    bill.StudsOffset = Vector3.new(0, 3, 0)
     bill.AlwaysOnTop = true
-    bill.MaxDistance = 500
+    bill.MaxDistance = 1000
     bill.LightInfluence = 0
+    local label = Instance.new("TextLabel")
+    label.BackgroundTransparency = 1
+    label.Size = UDim2.new(1, 0, 1, 0)
+    label.Font = Enum.Font.GothamBold
+    label.Text = info.Alias
+    label.TextColor3 = color
+    label.TextStrokeTransparency = 0
+    label.TextStrokeColor3 = Color3.new(0, 0, 0)
+    label.TextSize = 16
+    label.Parent = bill
+    bill.Parent = workspace.CurrentCamera or workspace
 
-    local text = Instance.new("TextLabel")
-    text.BackgroundTransparency = 1
-    text.Size = UDim2.new(1, 0, 1, 0)
-    text.Font = Enum.Font.GothamBold
-    text.Text = "Door " .. getDoorNumber(doorModel)
-    text.TextColor3 = Config.DOOR_COLOR
-    text.TextStrokeTransparency = 0
-    text.TextStrokeColor3 = Color3.new(0, 0, 0)
-    text.TextSize = 14
-    text.Parent = bill
-    bill.Parent = workspace
+    local conn = instance.Destroying:Connect(function() removeEntityHighlight(instance) end)
+    EntityHighlights[instance] = { Highlight = highlight, Box = box, Bill = bill, Conn = conn }
+end
 
-    doorESPObjects[doorModel] = { highlight = hl, billboard = bill, wrapper = wrapper, weld = weld }
+local function refreshEntityHighlights()
+    for instance in pairs(EntityHighlights) do
+        if not instance.Parent or not isInESPList(instance.Name) then removeEntityHighlight(instance) end
+    end
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("Model") and getEntityInfo(obj) and isInESPList(obj.Name) then addEntityHighlight(obj) end
+    end
+end
 
-    doorModel.Destroying:Once(function()
-        local d = doorESPObjects[doorModel]
-        if d then
-            pcall(function() d.highlight:Destroy() end)
-            pcall(function() d.billboard:Destroy() end)
-            pcall(function() d.wrapper:Destroy() end)
-            pcall(function() d.weld:Destroy() end)
-            doorESPObjects[doorModel] = nil
+local function setEntityESP(state)
+    entityESPEnabled = state
+    if state then refreshEntityHighlights()
+    else for instance in pairs(EntityHighlights) do removeEntityHighlight(instance) end end
+end
+
+local function handleSpawn(obj)
+    if not obj or not obj:IsA("Model") then return end
+    local info = getEntityInfo(obj)
+    if not info then return end
+    task.defer(function()
+        task.wait(0.15)
+        if not obj.Parent then return end
+        if entityESPEnabled and isInESPList(obj.Name) then addEntityHighlight(obj) end
+        if Hub.Toggles.NotifyEntities and Hub.Toggles.NotifyEntities.Value and isInNotifyList(obj.Name) then
+            Hub.Notify({ Title = info.NotifyMessage.Title, Description = info.NotifyMessage.Body, Time = 5 })
         end
     end)
 end
 
-local function removeDoorESP(doorModel)
-    local d = doorESPObjects[doorModel]
-    if d then
-        pcall(function() d.highlight:Destroy() end)
-        pcall(function() d.billboard:Destroy() end)
-        pcall(function() d.wrapper:Destroy() end)
-        pcall(function() d.weld:Destroy() end)
-        doorESPObjects[doorModel] = nil
+track(workspace.ChildAdded:Connect(handleSpawn))
+track(workspace.DescendantAdded:Connect(function(obj) if obj:IsA("Model") then handleSpawn(obj) end end))
+
+task.spawn(function()
+    while true do
+        task.wait(1.5)
+        if entityESPEnabled then refreshEntityHighlights() end
+    end
+end)
+
+-- ============================================================
+--  SHOW SEEK / EYESTALK PATH
+-- ============================================================
+local seekNodesFolder = Instance.new("Folder")
+seekNodesFolder.Name = "OldDoorsHub_SeekNodes"
+seekNodesFolder.Parent = workspace
+
+local seekBeams = {}
+local previousSeekNode = nil
+local seekPathColor = Color3.fromRGB(0, 255, 0)
+local showSeekPathEnabled = false
+local showEyestalkPathEnabled = false
+local eyestalkBeams = {}
+
+local function updateBeamVisibility(beams, visible)
+    local vis = visible and 0 or 1
+    local seq = NumberSequence.new({ NumberSequenceKeypoint.new(0, vis), NumberSequenceKeypoint.new(1, vis) })
+    for _, beam in pairs(beams) do
+        pcall(function() if beam.Parent then beam.Transparency = seq end end)
     end
 end
 
-local function clearAllDoorESP()
-    for m in pairs(doorESPObjects) do removeDoorESP(m) end
+local function clearSeekBeams()
+    seekNodesFolder:ClearAllChildren()
+    table.clear(seekBeams)
+    previousSeekNode = nil
 end
 
-local function scanDoors()
-    for _, obj in ipairs(workspace:GetDescendants()) do
-        if obj.Name == "Door" and obj:IsA("Model")
-            and obj.Parent and tonumber(obj.Parent.Name) then
-            if Hub.Toggles.DoorsESP and Hub.Toggles.DoorsESP.Value then
-                createDoorESP(obj)
-            else
-                removeDoorESP(obj)
-            end
+local function addSeekLight(light)
+    if light.Name ~= "SeekGuidingLight" then return end
+    if light:GetAttribute("HDH_Highlighted") then return end
+    light:SetAttribute("HDH_Highlighted", true)
+
+    local node = Instance.new("Part")
+    node.Size = Vector3.one
+    node.Transparency = 1
+    node.Parent = seekNodesFolder
+    node.Anchored = true
+    node.CFrame = light.CFrame
+    node.CanCollide = false
+    node.Name = "SeekNode"
+
+    local prev = previousSeekNode or node
+    previousSeekNode = node
+
+    local beam = Instance.new("Beam")
+    beam.Color = ColorSequence.new(seekPathColor)
+    beam.FaceCamera = true
+    beam.Width0 = 0.2
+    beam.Width1 = 0.2
+    beam.Brightness = 10
+    beam.LightInfluence = 0
+    beam.LightEmission = 0
+    beam.Enabled = true
+    local vis = showSeekPathEnabled and 0 or 1
+    beam.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, vis), NumberSequenceKeypoint.new(1, vis) })
+    beam.Parent = seekNodesFolder
+    local a0 = Instance.new("Attachment", node)
+    local a1 = Instance.new("Attachment", prev)
+    beam.Attachment0 = a0
+    beam.Attachment1 = a1
+    table.insert(seekBeams, beam)
+end
+
+local function handlePathLights(folder)
+    clearSeekBeams()
+    for _, light in ipairs(folder:GetChildren()) do addSeekLight(light) end
+    track(folder.ChildAdded:Connect(addSeekLight))
+end
+
+for _, obj in ipairs(workspace:GetChildren()) do
+    if obj.Name == "PathLights" then handlePathLights(obj) end
+end
+track(workspace.ChildAdded:Connect(function(obj)
+    if obj.Name == "PathLights" then handlePathLights(obj) end
+end))
+
+local function clearEyestalkBeams()
+    for _, beam in pairs(eyestalkBeams) do pcall(function() beam:Destroy() end) end
+    table.clear(eyestalkBeams)
+    for _, node in ipairs(seekNodesFolder:GetChildren()) do
+        if node.Name == "EyestalkNode" then node:Destroy() end
+    end
+end
+
+local function handleEyestalkRoom(room)
+    if not room:GetAttribute("RawName") or not string.find(room:GetAttribute("RawName"), "Eyestalk") then return end
+    if not showEyestalkPathEnabled then return end
+
+    task.spawn(function()
+        local roomExit = room:WaitForChild("RoomExit", 10)
+        local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+        if not roomExit or not root then return end
+
+        local path = PathfindingService:CreatePath({
+            AgentCanJump = false, AgentCanClimb = false, WaypointSpacing = 2,
+            AgentRadius = 1, AgentHeight = 1,
+        })
+        local ok = pcall(function() path:ComputeAsync(root.Position, roomExit.Position) end)
+        if not ok or path.Status ~= Enum.PathStatus.Success then return end
+
+        local prevNode = nil
+        for _, wp in ipairs(path:GetWaypoints()) do
+            local node = Instance.new("Part")
+            node.Size = Vector3.one
+            node.Transparency = 1
+            node.Parent = seekNodesFolder
+            node.Anchored = true
+            node.Position = wp.Position
+            node.CanCollide = false
+            node.Name = "EyestalkNode"
+
+            local prev = prevNode or node
+            prevNode = node
+
+            local beam = Instance.new("Beam")
+            beam.Color = ColorSequence.new(seekPathColor)
+            beam.FaceCamera = true
+            beam.Width0 = 0.2
+            beam.Width1 = 0.2
+            beam.Brightness = 10
+            beam.LightInfluence = 0
+            beam.LightEmission = 0
+            beam.Enabled = true
+            local vis = showEyestalkPathEnabled and 0 or 1
+            beam.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, vis), NumberSequenceKeypoint.new(1, vis) })
+            beam.Parent = seekNodesFolder
+            local a0 = Instance.new("Attachment", node)
+            local a1 = Instance.new("Attachment", prev)
+            beam.Attachment0 = a0
+            beam.Attachment1 = a1
+            table.insert(eyestalkBeams, beam)
+            task.wait()
         end
-    end
+    end)
 end
 
+if CurrentRooms then track(CurrentRooms.ChildAdded:Connect(handleEyestalkRoom)) end
+
 -- ============================================================
---  INSTANT PROMPT
+--  NOTIFY HASTE / OXYGEN
 -- ============================================================
-local function makePromptInstant(prompt)
-    if not prompt:IsA("ProximityPrompt") then return end
-    if savedPrompts[prompt] then return end
-    savedPrompts[prompt] = {
-        HoldDuration = prompt.HoldDuration,
-        MaxActivationDistance = prompt.MaxActivationDistance,
-        RequiresLineOfSight = prompt.RequiresLineOfSight,
-        ClickablePrompt = prompt.ClickablePrompt,
-    }
-    prompt.HoldDuration = 0
-    prompt.RequiresLineOfSight = false
-    prompt.ClickablePrompt = true
+local notifyHasteEnabled = false
+local notifyOxygenEnabled = false
+local lastOxygen = nil
+
+local function formatTime(sec)
+    local m = math.floor(sec / 60)
+    local s = sec - m * 60
+    return string.format("%02d:%02d", m, s)
 end
 
-local function restorePrompt(prompt)
-    local s = savedPrompts[prompt]
-    if not s then return end
-    if prompt and prompt.Parent then
-        prompt.HoldDuration = s.HoldDuration
-        prompt.MaxActivationDistance = s.MaxActivationDistance
-        prompt.RequiresLineOfSight = s.RequiresLineOfSight
-        prompt.ClickablePrompt = s.ClickablePrompt
-    end
-    savedPrompts[prompt] = nil
-end
-
-local function applyInstant()
-    for _, obj in ipairs(workspace:GetDescendants()) do
-        if obj:IsA("ProximityPrompt") then
-            if Hub.Toggles.instantPrompt and Hub.Toggles.instantPrompt.Value then makePromptInstant(obj)
-            else restorePrompt(obj) end
-        end
-    end
-end
-
--- ============================================================
---  UPDATE LOOP
--- ============================================================
-local function updateLoop()
-    local myPos = getPlayerPos()
-
-    if Hub.Toggles.espPlayers and Hub.Toggles.espPlayers.Value then
-        for tp, data in pairs(espObjects) do
-            local char = tp.Character
-            local charPos
-            if char then
-                local h = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChildWhichIsA("BasePart")
-                charPos = h and h.Position
+local function hookHasteTimer()
+    if not FloorReplicated then return end
+    local timer = FloorReplicated:FindFirstChild("DigitalTimer")
+    if timer then
+        track(timer:GetPropertyChangedSignal("Value"):Connect(function()
+            if notifyHasteEnabled then
+                Hub.Notify({ Title = "Haste Timer", Description = formatTime(timer.Value), Time = 2 })
             end
-            local inRange = true
-            if myPos and charPos then inRange = (charPos - myPos).Magnitude <= Config.ESP_RADIUS end
-            if char and data.highlight and inRange then
-                data.highlight.Enabled = true
-                data.highlight.Adornee = char
-                if data.billboard then
-                    data.billboard.Enabled = true
-                    data.billboard.Adornee = char:FindFirstChild("Head") or char:FindFirstChildWhichIsA("BasePart")
+        end))
+    end
+    track(FloorReplicated.ChildAdded:Connect(function(obj)
+        if obj.Name == "DigitalTimer" then
+            track(obj:GetPropertyChangedSignal("Value"):Connect(function()
+                if notifyHasteEnabled then
+                    Hub.Notify({ Title = "Haste Timer", Description = formatTime(obj.Value), Time = 2 })
                 end
-            else
-                if data.highlight then data.highlight.Enabled = false end
-                if data.billboard then data.billboard.Enabled = false end
-            end
-        end
-    end
-
-    if Hub.Toggles.espTools and Hub.Toggles.espTools.Value then
-        for tool, data in pairs(toolEspObjects) do
-            if not tool.Parent then removeToolESP(tool)
-            else
-                local ap = tool:FindFirstChildWhichIsA("BasePart")
-                local toolPos = ap and ap.Position
-                local inRange = true
-                if myPos and toolPos then inRange = (toolPos - myPos).Magnitude <= Config.ESP_RADIUS end
-                if data.highlight then data.highlight.Enabled = inRange data.highlight.Adornee = tool end
-                if data.billboard then data.billboard.Enabled = inRange data.billboard.Adornee = ap or tool end
-                if data.nameLabel then data.nameLabel.Text = tool.Name end
-            end
-        end
-    end
-
-    if Hub.Toggles.espPrompts and Hub.Toggles.espPrompts.Value then
-        for target, data in pairs(promptEspObjects) do
-            if not target.Parent then removePromptESP(target)
-            else
-                local ap = getModelPart(target)
-                local inRange = true
-                if myPos and ap then inRange = (ap.Position - myPos).Magnitude <= Config.ESP_RADIUS end
-                if data.billboard then data.billboard.Enabled = inRange data.billboard.Adornee = ap or target end
-                if data.highlight then data.highlight.Enabled = inRange data.highlight.Adornee = target end
-                if data.nameLabel then data.nameLabel.Text = target.Name end
-                if data.promptLabel and data.prompt and data.prompt.Parent then
-                    data.promptLabel.Text = data.prompt.ActionText ~= "" and data.prompt.ActionText or "Interact"
-                end
-                if data.distLabel and myPos and ap then
-                    data.distLabel.Text = string.format("[%.0f studs]", (ap.Position - myPos).Magnitude)
-                end
-            end
-        end
-    end
-
-    if Hub.Toggles.espMonsters and Hub.Toggles.espMonsters.Value then
-        for target, data in pairs(monsterEspObjects) do
-            if not target.Parent then removeMonsterESP(target)
-            else
-                local ap = getModelPart(target)
-                if data.billboard then data.billboard.Adornee = ap or target end
-                if data.highlight then data.highlight.Adornee = target end
-                if data.distLabel and myPos and ap then
-                    data.distLabel.Text = string.format("[%.0f studs]", (ap.Position - myPos).Magnitude)
-                end
-            end
-        end
-    end
-
-    if Hub.Toggles.DoorsESP and Hub.Toggles.DoorsESP.Value then
-        for doorModel, data in pairs(doorESPObjects) do
-            if not doorModel.Parent then removeDoorESP(doorModel)
-            else
-                local wrapper = data.wrapper
-                if wrapper and wrapper.Parent then
-                    local doorPart = doorModel:FindFirstChild("Door")
-                    if doorPart and doorPart:IsA("BasePart") then
-                        if wrapper.Size ~= doorPart.Size then wrapper.Size = doorPart.Size end
-                    end
-                    local inRange = true
-                    if myPos then inRange = (wrapper.Position - myPos).Magnitude <= Config.ESP_RADIUS end
-                    if data.highlight then data.highlight.Enabled = inRange end
-                    if data.billboard then data.billboard.Enabled = inRange end
-                end
-            end
-        end
-    end
-end
-
--- ============================================================
---  UI
--- ============================================================
-local function buildUI()
-    Group = Hub.Groupboxes.Visuals_ESP
-
-    Group:AddToggle("espPlayers", {
-        Text = "ESP Players", Default = false,
-        Callback = function(on)
-            if on then for _, p in ipairs(Players:GetPlayers()) do createESP(p) end
-            else clearAllESP() end
-        end,
-    })
-
-    Group:AddToggle("espTools", {
-        Text = "ESP Tools", Default = false,
-        Callback = function(on) if on then scanTools() else clearAllToolESP() end end,
-    })
-
-    Group:AddToggle("espPrompts", {
-        Text = "ESP Prompts", Default = false,
-        Callback = function(on) if on then scanPrompts() else clearAllPromptESP() end end,
-    })
-
-    Group:AddToggle("espMonsters", {
-        Text = "ESP Monsters", Default = false,
-        Callback = function(on) if on then scanMonsters() else clearAllMonsterESP() end end,
-    })
-
-    Group:AddToggle("DoorsESP", {
-        Text = "Doors ESP (Green)", Default = false,
-        Tooltip = "ESP дверей с номером (wrapper + weld)",
-        Callback = function(on) if on then scanDoors() else clearAllDoorESP() end end,
-    })
-
-    Group:AddDivider()
-
-    Group:AddToggle("instantPrompt", {
-        Text = "Instant Prompt", Default = false,
-        Callback = function() applyInstant() end,
-    })
-end
-
--- ============================================================
---  INIT
--- ============================================================
-function ESP.init(hub)
-    Hub, Config = hub, hub.Config
-    buildUI()
-
-    for _, p in ipairs(Players:GetPlayers()) do watchPlayer(p) end
-    track(Players.PlayerAdded:Connect(function(p)
-        watchPlayer(p)
-        if Hub.Toggles.espPlayers and Hub.Toggles.espPlayers.Value then
-            task.wait(0.5) createESP(p)
+            end))
         end
     end))
-    track(Players.PlayerRemoving:Connect(function(p) removeESP(p) end))
+end
+task.defer(hookHasteTimer)
 
-    track(workspace.DescendantAdded:Connect(function(obj)
-        if obj:IsA("Tool") and Hub.Toggles.espTools and Hub.Toggles.espTools.Value then
-            task.wait(Config.TOOL_WAIT or 0.1) createToolESP(obj)
+local function attachOxygenHook(char)
+    if not char then return end
+    lastOxygen = char:GetAttribute("Oxygen")
+    track(char:GetAttributeChangedSignal("Oxygen"):Connect(function()
+        local cur = char:GetAttribute("Oxygen")
+        if notifyOxygenEnabled and cur and lastOxygen and cur < lastOxygen then
+            Hub.Notify({ Title = "Oxygen", Description = string.format("%.1f%%", cur), Time = 2 })
         end
+        lastOxygen = cur
     end))
+end
+if player.Character then attachOxygenHook(player.Character) end
+track(player.CharacterAdded:Connect(function(char) task.wait(0.5) attachOxygenHook(char) end))
 
-    track(workspace.DescendantAdded:Connect(function(obj)
-        if obj:IsA("ProximityPrompt") then
-            if Hub.Toggles.espPrompts and Hub.Toggles.espPrompts.Value then
-                task.wait(Config.TOOL_WAIT or 0.1)
-                local target = getPromptTarget(obj)
-                if target and not isPromptBlacklisted(target) then createPromptESP(obj) end
+-- ============================================================
+--  WORLD: Remove Fog / Remove Cutscenes / Fullbright
+-- ============================================================
+local fogEnabled = false
+local fogSaved = {}
+local fogConns = {}
+local fogInstanceConns = {}
+
+local function setRemoveFog(state)
+    if state == fogEnabled then return end
+    fogEnabled = state
+    if state then
+        fogSaved.FogEnd = Lighting.FogEnd
+        fogSaved.FogStart = Lighting.FogStart
+        Lighting.FogEnd = 10000000
+        for _, obj in ipairs(Lighting:GetChildren()) do
+            if obj:IsA("Atmosphere") then
+                if not obj:GetAttribute("HDH_OldDensity") then obj:SetAttribute("HDH_OldDensity", obj.Density) end
+                obj.Density = 0
+                if not fogInstanceConns[obj] then
+                    fogInstanceConns[obj] = obj:GetPropertyChangedSignal("Density"):Connect(function()
+                        if fogEnabled and obj.Density ~= 0 then
+                            if not obj:GetAttribute("HDH_OldDensity") then obj:SetAttribute("HDH_OldDensity", obj.Density) end
+                            obj.Density = 0
+                        end
+                    end)
+                end
             end
-            if Hub.Toggles.instantPrompt and Hub.Toggles.instantPrompt.Value then
-                task.wait(Config.TOOL_WAIT or 0.1) makePromptInstant(obj)
+        end
+        fogConns.FogEnd = Lighting:GetPropertyChangedSignal("FogEnd"):Connect(function()
+            if fogEnabled and Lighting.FogEnd ~= 10000000 then
+                fogSaved.FogEnd = Lighting.FogEnd
+                Lighting.FogEnd = 10000000
+            end
+        end)
+    else
+        Lighting.FogEnd = fogSaved.FogEnd or 1000
+        if fogSaved.FogStart then Lighting.FogStart = fogSaved.FogStart end
+        table.clear(fogSaved)
+        for _, c in pairs(fogConns) do pcall(function() c:Disconnect() end) end
+        table.clear(fogConns)
+        for obj, c in pairs(fogInstanceConns) do
+            pcall(function() c:Disconnect() end)
+            if obj and obj.Parent then
+                local old = obj:GetAttribute("HDH_OldDensity")
+                if old then obj.Density = old end
             end
         end
-    end))
-
-    track(workspace.DescendantAdded:Connect(function(obj)
-        if Hub.Toggles.espMonsters and Hub.Toggles.espMonsters.Value and shouldMonster(obj) then
-            task.wait(Config.TOOL_WAIT or 0.1) createMonsterESP(obj)
-        end
-    end))
-
-    track(workspace.DescendantAdded:Connect(function(obj)
-        if obj.Name == "Door" and obj:IsA("Model") and obj.Parent and tonumber(obj.Parent.Name) then
-            if Hub.Toggles.DoorsESP and Hub.Toggles.DoorsESP.Value then
-                task.wait(Config.TOOL_WAIT or 0.1) createDoorESP(obj)
-            end
-        end
-    end))
-
-    track(RunService.RenderStepped:Connect(updateLoop))
-
-    function ESP.cleanup()
-        clearAllESP()
-        clearAllToolESP()
-        clearAllPromptESP()
-        clearAllMonsterESP()
-        clearAllDoorESP()
-        for p in pairs(savedPrompts) do restorePrompt(p) end
-        savedPrompts = {}
-        for _, c in ipairs(connections) do pcall(function() c:Disconnect() end) end
-        connections = {}
+        table.clear(fogInstanceConns)
     end
-
-    print("[ESP] init")
-    return ESP
 end
 
-return ESP
+track(Lighting.DescendantAdded:Connect(function(obj)
+    if obj:IsA("Atmosphere") and fogEnabled then
+        if not obj:GetAttribute("HDH_OldDensity") then obj:SetAttribute("HDH_OldDensity", obj.Density) end
+        obj.Density = 0
+        if not fogInstanceConns[obj] then
+            fogInstanceConns[obj] = obj:GetPropertyChangedSignal("Density"):Connect(function()
+                if fogEnabled and obj.Density ~= 0 then
+                    if not obj:GetAttribute("HDH_OldDensity") then obj:SetAttribute("HDH_OldDensity", obj.Density) end
+                    obj.Density = 0
+                end
+            end)
+        end
+    end
+end))
+
+local cutsceneNames = {
+    "Figure", "FigureEnd", "FigureHotelEnd", "FigureHotelFire",
+    "SeekIntroFools", "SeekIntroHotel", "SeekIntroMines", "SeekIntroMines2",
+    "SerewSeekDrain", "SewerSeekLower", "GrumbleNestEnd", "EyestalkIntro",
+}
+local removeCutscenesEnabled = false
+
+local function processCutsceneFolder(folder, state)
+    if not folder then return end
+    for _, obj in ipairs(folder:GetChildren()) do
+        if obj:IsA("ModuleScript") then
+            local origName
