@@ -1,5 +1,5 @@
 -- ============================================================
---  ESP | Obsidian (категории + Doors + Entity + Paths + World)
+--  ESP | Obsidian (модуль для doors-hub-modular2)
 -- ============================================================
 local Players            = game:GetService("Players")
 local RunService         = game:GetService("RunService")
@@ -26,7 +26,7 @@ end
 local function track(c) table.insert(connections, c) return c end
 
 -- ============================================================
---  ESP КАТЕГОРИИ (Keys, Doors, Items, Books, Misc, Objectives, HidingSpots, Chests, Currency, Ladders)
+--  КАТЕГОРИИ ESP
 -- ============================================================
 local ESP_CATEGORIES = {
     Keys = {
@@ -611,7 +611,7 @@ if player.Character then attachOxygenHook(player.Character) end
 track(player.CharacterAdded:Connect(function(char) task.wait(0.5) attachOxygenHook(char) end))
 
 -- ============================================================
---  WORLD: Remove Fog / Remove Cutscenes / Fullbright
+--  WORLD: Remove Fog / Cutscenes / Fullbright
 -- ============================================================
 local fogEnabled = false
 local fogSaved = {}
@@ -688,4 +688,43 @@ local function processCutsceneFolder(folder, state)
     if not folder then return end
     for _, obj in ipairs(folder:GetChildren()) do
         if obj:IsA("ModuleScript") then
-            local origName
+            local origName = obj:GetAttribute("HDH_OriginalName")
+            if not origName then
+                origName = obj.Name:gsub("_Disabled$", "")
+                obj:SetAttribute("HDH_OriginalName", origName)
+            end
+            if table.find(cutsceneNames, origName) then
+                if state then
+                    if obj.Name ~= origName .. "_Disabled" then obj.Name = origName .. "_Disabled" end
+                else
+                    if obj.Name ~= origName then obj.Name = origName end
+                end
+            end
+        end
+    end
+end
+
+local function setRemoveCutscenes(state)
+    removeCutscenesEnabled = state
+    local pg = player:FindFirstChild("PlayerGui")
+    local mainUI = pg and pg:FindFirstChild("MainUI")
+    if mainUI then
+        local initiator = mainUI:FindFirstChild("Initiator")
+        local mainGame = initiator and initiator:FindFirstChild("Main_Game")
+        local remoteListener = mainGame and mainGame:FindFirstChild("RemoteListener")
+        local cutscenes = remoteListener and remoteListener:FindFirstChild("Cutscenes")
+        if cutscenes then processCutsceneFolder(cutscenes, state) end
+    end
+    if FloorReplicated then processCutsceneFolder(FloorReplicated, state) end
+end
+
+local function hookCutsceneFolders()
+    local pg = player:FindFirstChild("PlayerGui")
+    local mainUI = pg and pg:FindFirstChild("MainUI")
+    if mainUI then
+        local initiator = mainUI:FindFirstChild("Initiator")
+        local mainGame = initiator and initiator:FindFirstChild("Main_Game")
+        local remoteListener = mainGame and mainGame:FindFirstChild("RemoteListener")
+        local cutscenes = remoteListener and remoteListener:FindFirstChild("Cutscenes")
+        if cutscenes then
+            track
