@@ -1,9 +1,10 @@
 -- ============================================================
---  MOVEMENT | Pivot teleport (без BodyVelocity, без raknet)
+--  MOVEMENT | Abysall SpeedBoost (exact copy)
 -- ============================================================
 local Players           = game:GetService("Players")
 local RunService        = game:GetService("RunService")
 local Lighting          = game:GetService("Lighting")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local player            = Players.LocalPlayer
 
 local Movement = {}
@@ -18,38 +19,89 @@ local fbState    = { enabled = false, saved = {} }
 local function track(c) table.insert(connections, c) return c end
 local function getChar() return player.Character end
 local function getHum() local c = getChar() return c and c:FindFirstChildOfClass("Humanoid") end
+local function getLM() return ReplicatedStorage:FindFirstChild("LiveModifiers") end
+local function getFloor()
+    local gd = ReplicatedStorage:FindFirstChild("GameData")
+    if not gd then return nil end
+    local f = gd:FindFirstChild("Floor")
+    return f and f.Value
+end
 
 -- ============================================================
---  SPEED — Pivot teleport
+--  ABYSALL: IsCrouching
+-- ============================================================
+local function isCrouching()
+    local char = getChar()
+    if not char then return false end
+    local floor = getFloor()
+    if floor == "Fools" or floor == "OldHotel" then
+        return char:GetAttribute("Crouching") == true
+    end
+    local cp = char:FindFirstChild("CollisionPart") or char:FindFirstChild("Collision")
+    if cp then return cp.CollisionGroup == "PlayerCrouching" end
+    return false
+end
+
+-- ============================================================
+--  ABYSALL: GetInjuriesSpeed
+-- ============================================================
+local function getInjuriesSpeed()
+    local hum = getHum()
+    if not hum then return 0 end
+    return 0.075 * (hum.MaxHealth - hum.Health)
+end
+
+-- ============================================================
+--  ABYSALL: GetCurrentSpeed (точная копия)
+-- ============================================================
+local function getCurrentSpeed()
+    local char = getChar()
+    if not char then return 15 end
+
+    local speed = 15
+    speed += char:GetAttribute("SpeedBoost") or 0
+    speed += char:GetAttribute("SpeedBoostBehind") or 0
+    speed += char:GetAttribute("SpeedBoostExtra") or 0
+
+    local floor = getFloor()
+    if floor == "Party" then speed += 10 end
+
+    local lm = getLM()
+    if lm then
+        if lm:FindFirstChild("PlayerFast")      then speed += 3  end
+        if lm:FindFirstChild("PlayerFaster")    then speed += 6  end
+        if lm:FindFirstChild("PlayerFastest")   then speed += 20 end
+        if lm:FindFirstChild("PlayerSlow")      then speed -= 3  end
+        if lm:FindFirstChild("PlayerSlowHealth") then speed -= getInjuriesSpeed() end
+    end
+
+    if isCrouching() then
+        if lm and lm:FindFirstChild("PlayerCrouchSlow") then speed -= 8
+        elseif lm and lm:FindFirstChild("PlayerSlow")   then speed -= 8
+        else speed -= 5 end
+    end
+    return speed
+end
+
+-- ============================================================
+--  ABYSALL: SpeedBoostToggle handler
 -- ============================================================
 local function cleanupSpeed()
     if speedState.loop then speedState.loop:Disconnect() speedState.loop = nil end
     local hum = getHum()
-    if hum then hum.WalkSpeed = 15 end
+    if hum then hum.WalkSpeed = getCurrentSpeed() end
 end
 
 local function applySpeed()
     local hum = getHum()
     if not hum then return end
-    hum.WalkSpeed = 15
 
     if not speedState.loop then
-        speedState.loop = RunService.Heartbeat:Connect(function()
+        speedState.loop = RunService.RenderStepped:Connect(function()
             if not speedState.enabled then return end
-            local char = getChar()
-            local cam = workspace.CurrentCamera
-            if not char or not cam then return end
-            local hum2 = char:FindFirstChildOfClass("Humanoid")
-            if not hum2 then return end
-
-            -- телепорт вперёд от камеры каждый кадр
-            -- speedState.value = стадов за кадр (1-100)
-            local offset = speedState.value * 0.1
-            if offset > 0 then
-                pcall(function()
-                    char:PivotTo(cam:GetPivot() * CFrame.new(0, 0, -offset))
-                end)
-            end
+            local h = getHum()
+            if not h then return end
+            h.WalkSpeed = getCurrentSpeed() + speedState.value
         end)
         track(speedState.loop)
     end
@@ -117,14 +169,14 @@ local function buildUI()
     Group = Hub.Groupboxes.Main_Movement
 
     Group:AddSlider("SpeedValue", {
-        Text = "Teleport Speed (0-100)", Min = 0, Max = 100, Default = 0, Rounding = 0,
-        Tooltip = "Стадов за кадр. 10 = ~60 стадов/сек, 100 = ~600 стадов/сек",
+        Text = "Speed Boost", Min = 0, Max = 100, Default = 0, Rounding = 0,
+        Tooltip = "Abysall-style: WalkSpeed = GetCurrentSpeed() + boost",
         Callback = function(v) speedState.value = math.floor(v) end,
     })
 
     Group:AddToggle("SpeedEnable", {
-        Text = "Enable Teleport Speed", Default = false,
-        Tooltip = "Pivot-телепорт вперёд от камеры. Обходит античит DOORS.",
+        Text = "Enable Speed Boost", Default = false,
+        Tooltip = "WalkSpeed = GetCurrentSpeed() + boost, каждый кадр",
         Callback = function(on)
             speedState.enabled = on
             if on then applySpeed() else cleanupSpeed() end
