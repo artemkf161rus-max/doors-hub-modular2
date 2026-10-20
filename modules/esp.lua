@@ -16,7 +16,7 @@ local espObjects        = {}  -- [Player] = {highlight, billboard}
 local toolEspObjects    = {}  -- [Tool] = {highlight, billboard, nameLabel}
 local promptEspObjects  = {}  -- [Target] = {highlight, billboard, nameLabel, promptLabel, distLabel, prompt}
 local monsterEspObjects = {}  -- [Target] = {highlight, billboard, nameLabel, distLabel}
-local doorESPObjects    = {}  -- [DoorModel] = {highlight, billboard, wrapper}
+local doorESPObjects    = {}  -- [DoorModel] = {highlight, billboard, wrapper, weld}
 local savedPrompts      = {}  -- [ProximityPrompt] = saved settings (instant)
 
 local function track(c) table.insert(connections, c) return c end
@@ -431,6 +431,16 @@ local function getDoorNumber(doorModel)
     local num = tonumber(doorModel.Parent and doorModel.Parent.Name)
         or tonumber(doorModel.Parent and doorModel.Parent.Parent and doorModel.Parent.Parent.Name)
     if num then num = num + 1 end
+    local floor = nil
+    local gd = game:GetService("ReplicatedStorage"):FindFirstChild("GameData")
+    if gd then
+        local f = gd:FindFirstChild("Floor")
+        if f then floor = f.Value end
+    end
+    if num then
+        if floor == "Mines" then num = num + 100 end
+        if floor == "Backdoor" then num = num - 50 end
+    end
     return tostring(num or "?")
 end
 
@@ -488,7 +498,7 @@ local function createDoorESP(doorModel)
     text.Parent = bill
     bill.Parent = workspace
 
-    doorESPObjects[doorModel] = { highlight = hl, billboard = bill, wrapper = wrapper }
+    doorESPObjects[doorModel] = { highlight = hl, billboard = bill, wrapper = wrapper, weld = weld }
 
     doorModel.Destroying:Once(function()
         local d = doorESPObjects[doorModel]
@@ -496,6 +506,7 @@ local function createDoorESP(doorModel)
             pcall(function() d.highlight:Destroy() end)
             pcall(function() d.billboard:Destroy() end)
             pcall(function() d.wrapper:Destroy() end)
+            pcall(function() d.weld:Destroy() end)
             doorESPObjects[doorModel] = nil
         end
     end)
@@ -507,6 +518,7 @@ local function removeDoorESP(doorModel)
         pcall(function() d.highlight:Destroy() end)
         pcall(function() d.billboard:Destroy() end)
         pcall(function() d.wrapper:Destroy() end)
+        pcall(function() d.weld:Destroy() end)
         doorESPObjects[doorModel] = nil
     end
 end
@@ -651,10 +663,8 @@ local function updateLoop()
             else
                 local wrapper = data.wrapper
                 if wrapper and wrapper.Parent then
-                    -- wrapper следует за Door через Weld, но на случай рассинхрона — подтягиваем
                     local doorPart = doorModel:FindFirstChild("Door")
                     if doorPart and doorPart:IsA("BasePart") then
-                        -- синхронизируем размер если дверь изменилась
                         if wrapper.Size ~= doorPart.Size then wrapper.Size = doorPart.Size end
                     end
                     local inRange = true
@@ -698,6 +708,7 @@ local function buildUI()
 
     Group:AddToggle("DoorsESP", {
         Text = "Doors ESP (Green)", Default = false,
+        Tooltip = "ESP дверей с номером (wrapper + weld)",
         Callback = function(on) if on then scanDoors() else clearAllDoorESP() end end,
     })
 
@@ -716,7 +727,6 @@ function ESP.init(hub)
     Hub, Config = hub, hub.Config
     buildUI()
 
-    -- Players
     for _, p in ipairs(Players:GetPlayers()) do watchPlayer(p) end
     track(Players.PlayerAdded:Connect(function(p)
         watchPlayer(p)
@@ -726,14 +736,12 @@ function ESP.init(hub)
     end))
     track(Players.PlayerRemoving:Connect(function(p) removeESP(p) end))
 
-    -- Tools
     track(workspace.DescendantAdded:Connect(function(obj)
         if obj:IsA("Tool") and Hub.Toggles.espTools and Hub.Toggles.espTools.Value then
             task.wait(Config.TOOL_WAIT or 0.1) createToolESP(obj)
         end
     end))
 
-    -- Prompts + instant
     track(workspace.DescendantAdded:Connect(function(obj)
         if obj:IsA("ProximityPrompt") then
             if Hub.Toggles.espPrompts and Hub.Toggles.espPrompts.Value then
@@ -747,14 +755,12 @@ function ESP.init(hub)
         end
     end))
 
-    -- Monsters
     track(workspace.DescendantAdded:Connect(function(obj)
         if Hub.Toggles.espMonsters and Hub.Toggles.espMonsters.Value and shouldMonster(obj) then
             task.wait(Config.TOOL_WAIT or 0.1) createMonsterESP(obj)
         end
     end))
 
-    -- Doors
     track(workspace.DescendantAdded:Connect(function(obj)
         if obj.Name == "Door" and obj:IsA("Model") and obj.Parent and tonumber(obj.Parent.Name) then
             if Hub.Toggles.DoorsESP and Hub.Toggles.DoorsESP.Value then
