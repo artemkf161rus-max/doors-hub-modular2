@@ -1,5 +1,5 @@
 -- ============================================================
---  JUMP ENABLE | Obsidian
+--  JUMP ENABLE | Obsidian (fixed)
 -- ============================================================
 local Players          = game:GetService("Players")
 local RunService       = game:GetService("RunService")
@@ -14,6 +14,7 @@ local connections = {}
 local jumpState = {
     enabled = false, jumpPower = 50,
     loop = nil, infiniteLoop = nil,
+    originalJumpPower = nil,
 }
 
 local function track(c) table.insert(connections, c) return c end
@@ -29,11 +30,12 @@ local function applyJump()
     end
 end
 
+-- ХУК __namecall: блокирует CanJump=false ТОЛЬКО при включённом тумблере
 if hookmetamethod and newcclosure and getnamecallmethod then
     pcall(function()
         local oldNamecall
         oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
-            if getnamecallmethod() == "SetAttribute" then
+            if getnamecallmethod() == "SetAttribute" and jumpState.enabled then
                 local args = {...}
                 if args[1] == "CanJump" and args[2] == false then
                     return oldNamecall(self, "CanJump", true)
@@ -44,16 +46,16 @@ if hookmetamethod and newcclosure and getnamecallmethod then
     end)
 end
 
+-- ХУК __index на JumpPower: активен ТОЛЬКО при включённом тумблере
 if hookmetamethod and newcclosure then
     pcall(function()
         local oldIndex
         oldIndex = hookmetamethod(game, "__index", newcclosure(function(self, key)
-            if key == "JumpPower" then
-                local real = oldIndex(self, key)
-                if real and real < jumpState.jumpPower then return jumpState.jumpPower end
-                return real
+            local real = oldIndex(self, key)
+            if jumpState.enabled and key == "JumpPower" and real and real < jumpState.jumpPower then
+                return jumpState.jumpPower
             end
-            return oldIndex(self, key)
+            return real
         end))
     end)
 end
@@ -89,14 +91,21 @@ end))
 
 local function buildUI()
     Group = Hub.Groupboxes.Main_Movement
-
     Group:AddDivider()
 
     Group:AddToggle("JumpEnable", {
         Text = "Jump Enable", Default = false,
         Callback = function(on)
             jumpState.enabled = on
-            if on then applyJump() startLoop() else stopLoop() end
+            if on then applyJump() startLoop()
+            else
+                stopLoop()
+                -- вернуть исходный JumpPower
+                local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+                if hum and jumpState.originalJumpPower then
+                    hum.JumpPower = jumpState.originalJumpPower
+                end
+            end
         end,
     })
 
@@ -105,8 +114,7 @@ local function buildUI()
         Callback = function(v)
             jumpState.jumpPower = math.floor(v)
             if jumpState.enabled then
-                local char = player.Character
-                local hum = char and char:FindFirstChildOfClass("Humanoid")
+                local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
                 if hum then hum.JumpPower = jumpState.jumpPower end
             end
         end,
@@ -118,8 +126,9 @@ local function buildUI()
             if on then
                 if not jumpState.infiniteLoop then
                     jumpState.infiniteLoop = RunService.Heartbeat:Connect(function()
-                        if not Hub.Toggles.InfiniteJumps or not Hub.Toggles.InfiniteJumps.Value then return end
-                        if UserInputService:IsKeyDown(Enum.KeyCode.Space) then
+                        if not jumpState.enabled then return end
+                        if Hub.Toggles.InfiniteJumps and Hub.Toggles.InfiniteJumps.Value
+                            and UserInputService:IsKeyDown(Enum.KeyCode.Space) then
                             local char = player.Character
                             local hum = char and char:FindFirstChildOfClass("Humanoid")
                             if hum then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
@@ -137,18 +146,27 @@ end
 
 function JumpEnable.init(hub)
     Hub, Config = hub, hub.Config
+    local char = player.Character
+    if char then
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if hum then jumpState.originalJumpPower = hum.JumpPower end
+    end
     buildUI()
 
-    track(player.CharacterAdded:Connect(function()
+    track(player.CharacterAdded:Connect(function(c)
         task.wait(1)
+        local hum = c:FindFirstChildOfClass("Humanoid")
+        if hum and jumpState.originalJumpPower == nil then
+            jumpState.originalJumpPower = hum.JumpPower
+        end
         if jumpState.enabled then applyJump() end
     end))
 
-    track(player.CharacterAdded:Connect(function(char)
+    track(player.CharacterAdded:Connect(function(c)
         task.wait(0.5)
-        track(char:GetAttributeChangedSignal("CanJump"):Connect(function()
-            if jumpState.enabled and char:GetAttribute("CanJump") ~= true then
-                char:SetAttribute("CanJump", true)
+        track(c:GetAttributeChangedSignal("CanJump"):Connect(function()
+            if jumpState.enabled and c:GetAttribute("CanJump") ~= true then
+                c:SetAttribute("CanJump", true)
             end
         end))
     end))
@@ -157,6 +175,12 @@ function JumpEnable.init(hub)
         jumpState.enabled = false
         stopLoop()
         if jumpState.infiniteLoop then jumpState.infiniteLoop:Disconnect() jumpState.infiniteLoop = nil end
+        -- вернуть CanJump и JumpPower
+        local char = player.Character
+        if char then
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if hum and jumpState.originalJumpPower then hum.JumpPower = jumpState.originalJumpPower end
+        end
         for _, c in ipairs(connections) do pcall(function() c:Disconnect() end) end
         connections = {}
     end
