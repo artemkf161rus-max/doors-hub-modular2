@@ -14,4 +14,4 @@
 Скопируй строку ниже и вставь в **экзекьютор** (Delta / Solara / Codex / Krnl):
 
 ```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/artemkf161rus-max/doors-hub-modular/refs/heads/main/main.lua"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/artemkf161rus-max/doors-hub-modular2/refs/heads/main/main.lua"))()
