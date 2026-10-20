@@ -1,5 +1,5 @@
 -- ============================================================
---  MOVEMENT | Abysall SpeedBoost (exact copy)
+--  MOVEMENT | SpeedBoost на модели персонажа (после Hotel+)
 -- ============================================================
 local Players           = game:GetService("Players")
 local RunService        = game:GetService("RunService")
@@ -20,6 +20,11 @@ local function track(c) table.insert(connections, c) return c end
 local function getChar() return player.Character end
 local function getHum() local c = getChar() return c and c:FindFirstChildOfClass("Humanoid") end
 local function getLM() return ReplicatedStorage:FindFirstChild("LiveModifiers") end
+local function getRemotes()
+    return ReplicatedStorage:FindFirstChild("RemotesFolder")
+        or ReplicatedStorage:FindFirstChild("EntityInfo")
+        or ReplicatedStorage:FindFirstChild("Bricks")
+end
 local function getFloor()
     local gd = ReplicatedStorage:FindFirstChild("GameData")
     if not gd then return nil end
@@ -27,9 +32,6 @@ local function getFloor()
     return f and f.Value
 end
 
--- ============================================================
---  ABYSALL: IsCrouching
--- ============================================================
 local function isCrouching()
     local char = getChar()
     if not char then return false end
@@ -42,18 +44,13 @@ local function isCrouching()
     return false
 end
 
--- ============================================================
---  ABYSALL: GetInjuriesSpeed
--- ============================================================
 local function getInjuriesSpeed()
     local hum = getHum()
     if not hum then return 0 end
     return 0.075 * (hum.MaxHealth - hum.Health)
 end
 
--- ============================================================
---  ABYSALL: GetCurrentSpeed (точная копия)
--- ============================================================
+-- ЧИТАЕМ SPEEDBOOST С МОДЕЛИ ПЕРСОНАЖА (как в актуальном Abysall)
 local function getCurrentSpeed()
     local char = getChar()
     if not char then return 15 end
@@ -83,18 +80,38 @@ local function getCurrentSpeed()
     return speed
 end
 
--- ============================================================
---  ABYSALL: SpeedBoostToggle handler
--- ============================================================
+local function fireCrouchForSpeed(value)
+    local rf = getRemotes()
+    if not rf then return end
+    local crouch = rf:FindFirstChild("Crouch")
+    if not crouch then return end
+    local first = (value and true) or isCrouching()
+    pcall(function() crouch:FireServer(first, true) end)
+end
+
 local function cleanupSpeed()
     if speedState.loop then speedState.loop:Disconnect() speedState.loop = nil end
     local hum = getHum()
     if hum then hum.WalkSpeed = getCurrentSpeed() end
+    fireCrouchForSpeed(false)
 end
 
 local function applySpeed()
     local hum = getHum()
     if not hum then return end
+
+    local char = getChar()
+    if char then
+        pcall(function()
+            char:SetAttribute("SpeedBoost", 0)
+            char:SetAttribute("SpeedBoostBehind", 0)
+            char:SetAttribute("SpeedBoostExtra", 0)
+        end)
+    end
+
+    if speedState.value > 0 then
+        fireCrouchForSpeed(true)
+    end
 
     if not speedState.loop then
         speedState.loop = RunService.RenderStepped:Connect(function()
@@ -107,9 +124,6 @@ local function applySpeed()
     end
 end
 
--- ============================================================
---  FOV
--- ============================================================
 local function cleanupFOV()
     if fovState.loop then fovState.loop:Disconnect() fovState.loop = nil end
     local cam = workspace.CurrentCamera
@@ -129,9 +143,6 @@ local function applyFOV()
     end
 end
 
--- ============================================================
---  FULLBRIGHT
--- ============================================================
 local function applyFullbright()
     if not fbState.saved.saved then
         fbState.saved.Ambient        = Lighting.Ambient
@@ -162,21 +173,20 @@ local function cleanupFullbright()
     end
 end
 
--- ============================================================
---  UI
--- ============================================================
 local function buildUI()
     Group = Hub.Groupboxes.Main_Movement
 
     Group:AddSlider("SpeedValue", {
         Text = "Speed Boost", Min = 0, Max = 100, Default = 0, Rounding = 0,
-        Tooltip = "Abysall-style: WalkSpeed = GetCurrentSpeed() + boost",
-        Callback = function(v) speedState.value = math.floor(v) end,
+        Tooltip = "WalkSpeed = GetCurrentSpeed() + boost (читает SpeedBoost с Character)",
+        Callback = function(v)
+            speedState.value = math.floor(v)
+            fireCrouchForSpeed(speedState.value > 0)
+        end,
     })
 
     Group:AddToggle("SpeedEnable", {
         Text = "Enable Speed Boost", Default = false,
-        Tooltip = "WalkSpeed = GetCurrentSpeed() + boost, каждый кадр",
         Callback = function(on)
             speedState.enabled = on
             if on then applySpeed() else cleanupSpeed() end
@@ -210,15 +220,17 @@ local function buildUI()
     })
 end
 
--- ============================================================
---  INIT
--- ============================================================
 function Movement.init(hub)
     Hub, Config = hub, hub.Config
     buildUI()
 
-    track(player.CharacterAdded:Connect(function()
+    track(player.CharacterAdded:Connect(function(char)
         task.wait(1)
+        pcall(function()
+            char:SetAttribute("SpeedBoost", 0)
+            char:SetAttribute("SpeedBoostBehind", 0)
+            char:SetAttribute("SpeedBoostExtra", 0)
+        end)
         if speedState.enabled then
             cleanupSpeed()
             applySpeed()
