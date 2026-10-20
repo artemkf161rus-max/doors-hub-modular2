@@ -1,5 +1,5 @@
 -- ============================================================
---  MOVEMENT | Obsidian (fixed WalkSpeed)
+--  MOVEMENT | Abysall-style WalkSpeed
 -- ============================================================
 local Players           = game:GetService("Players")
 local RunService        = game:GetService("RunService")
@@ -12,69 +12,82 @@ local Movement = {}
 local Hub, Config, Group
 local connections = {}
 
-local speedState = { enabled = false, value = 16, loop = nil }
+local speedState = { enabled = false, value = 0, loop = nil }
 local fovState   = { enabled = false, value = 70, loop = nil }
 local fbState    = { enabled = false, saved = {} }
 
 local function track(c) table.insert(connections, c) return c end
 
 -- ============================================================
---  ABYSSAL-STYLE SPEED
+--  СЕРВИСЫ ДЛЯ РАСЧЁТА СКОРОСТИ
 -- ============================================================
 local function getChar() return player.Character end
 local function getHum() local c = getChar() return c and c:FindFirstChildOfClass("Humanoid") end
 local function getLiveModifiers()
     return ReplicatedStorage:FindFirstChild("LiveModifiers")
 end
+local function getFloor()
+    local gd = ReplicatedStorage:FindFirstChild("GameData")
+    if not gd then return nil end
+    local f = gd:FindFirstChild("Floor")
+    return f and f.Value
+end
 local function isCrouching(char)
     if not char then return false end
-    local cp = char:FindFirstChild("CollisionPart") or char:FindFirstChild("Collision")
-    if cp then
-        local crouch = cp:FindFirstChild("CollisionCrouch")
-        if crouch then return crouch.CollisionGroup == "PlayerCrouching" end
+    local floor = getFloor()
+    if floor == "Fools" or floor == "OldHotel" then
+        return char:GetAttribute("Crouching") == true
     end
+    local cp = char:FindFirstChild("CollisionPart") or char:FindFirstChild("Collision")
+    if cp then return cp.CollisionGroup == "PlayerCrouching" end
     return false
 end
 local function getInjuriesSpeed(hum)
     if not hum then return 0 end
     return 0.075 * (hum.MaxHealth - hum.Health)
 end
+
+-- ТОЧНАЯ КОПИЯ ИЗ ABYSALL
 local function getCurrentSpeed()
     local char = getChar()
-    local hum  = getHum()
-    local base = 15
-    if not char or not hum then return base end
-    base += char:GetAttribute("SpeedBoost") or 0
-    base += char:GetAttribute("SpeedBoostBehind") or 0
-    base += char:GetAttribute("SpeedBoostExtra") or 0
+    local hum = getHum()
+    if not char or not hum then return 15 end
+
+    local speed = 15
+    speed += char:GetAttribute("SpeedBoost") or 0
+    speed += char:GetAttribute("SpeedBoostBehind") or 0
+    speed += char:GetAttribute("SpeedBoostExtra") or 0
+
+    local floor = getFloor()
+    if floor == "Party" then speed += 10 end
 
     local lm = getLiveModifiers()
     if lm then
-        if lm:FindFirstChild("PlayerFast")    then base += 3 end
-        if lm:FindFirstChild("PlayerFaster")  then base += 6 end
-        if lm:FindFirstChild("PlayerFastest") then base += 20 end
-        if lm:FindFirstChild("PlayerSlow")    then base -= 3 end
-        if lm:FindFirstChild("PlayerSlowHealth") then base -= getInjuriesSpeed(hum) end
+        if lm:FindFirstChild("PlayerFast")      then speed += 3  end
+        if lm:FindFirstChild("PlayerFaster")    then speed += 6  end
+        if lm:FindFirstChild("PlayerFastest")   then speed += 20 end
+        if lm:FindFirstChild("PlayerSlow")      then speed -= 3  end
+        if lm:FindFirstChild("PlayerSlowHealth") then speed -= getInjuriesSpeed(hum) end
     end
 
     if isCrouching(char) then
-        if lm and lm:FindFirstChild("PlayerCrouchSlow") then base -= 8
-        elseif lm and lm:FindFirstChild("PlayerSlow") then base -= 8
-        else base -= 5 end
+        if lm and lm:FindFirstChild("PlayerCrouchSlow") then speed -= 8
+        elseif lm and lm:FindFirstChild("PlayerSlow")   then speed -= 8
+        else speed -= 5 end
     end
-    return base
+    return speed
 end
 
+-- ============================================================
+--  SPEED — как в Abysall
+-- ============================================================
 local function applySpeed()
     if speedState.loop then return end
-    speedState.loop = RunService.Heartbeat:Connect(function()
+    speedState.loop = RunService.RenderStepped:Connect(function()
         if not speedState.enabled then return end
         local hum = getHum()
         if not hum then return end
-        local target = getCurrentSpeed() + speedState.value
-        if math.abs(hum.WalkSpeed - target) > 0.1 then
-            hum.WalkSpeed = target
-        end
+        hum.WalkSpeed = getCurrentSpeed() + speedState.value
     end)
     track(speedState.loop)
 end
@@ -139,13 +152,13 @@ local function buildUI()
     Group = Hub.Groupboxes.Main_Movement
 
     Group:AddSlider("SpeedValue", {
-        Text = "Speed Boost", Min = 0, Max = 135, Default = 0, Rounding = 0,
+        Text = "Speed Boost", Min = 0, Max = 100, Default = 0, Rounding = 0,
         Callback = function(v) speedState.value = math.floor(v) end,
     })
 
     Group:AddToggle("SpeedEnable", {
-        Text = "Enable Speed", Default = false,
-        Tooltip = "Обход античита через атрибут SpeedBoost",
+        Text = "Enable Speed Boost", Default = false,
+        Tooltip = "Abysall-style: WalkSpeed = GetCurrentSpeed() + boost",
         Callback = function(on)
             speedState.enabled = on
             if on then applySpeed() else cleanupSpeed() end
