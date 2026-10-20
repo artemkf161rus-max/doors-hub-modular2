@@ -1,69 +1,98 @@
 -- ============================================================
---  MOVEMENT | Obsidian
+--  MOVEMENT | Obsidian (fixed WalkSpeed)
 -- ============================================================
-local Players    = game:GetService("Players")
-local RunService = game:GetService("RunService")
-local Lighting   = game:GetService("Lighting")
-local player     = Players.LocalPlayer
+local Players           = game:GetService("Players")
+local RunService        = game:GetService("RunService")
+local Lighting          = game:GetService("Lighting")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local player            = Players.LocalPlayer
 
 local Movement = {}
 
 local Hub, Config, Group
 local connections = {}
 
-local speedState = { enabled = false, value = 16, bv = nil, loop = nil }
+local speedState = { enabled = false, value = 16, loop = nil }
 local fovState   = { enabled = false, value = 70, loop = nil }
 local fbState    = { enabled = false, saved = {} }
 
 local function track(c) table.insert(connections, c) return c end
 
-local function cleanupSpeed()
-    if speedState.loop then speedState.loop:Disconnect() speedState.loop = nil end
-    if speedState.bv and speedState.bv.Parent then speedState.bv:Destroy() end
-    speedState.bv = nil
-    local char = player.Character
-    if char then
-        local hum = char:FindFirstChildOfClass("Humanoid")
-        if hum then hum.WalkSpeed = Config.FAKE_SPEED end
-        local root = char:FindFirstChild("HumanoidRootPart")
-        if root then root.CustomPhysicalProperties = nil end
+-- ============================================================
+--  ABYSSAL-STYLE SPEED
+-- ============================================================
+local function getChar() return player.Character end
+local function getHum() local c = getChar() return c and c:FindFirstChildOfClass("Humanoid") end
+local function getLiveModifiers()
+    return ReplicatedStorage:FindFirstChild("LiveModifiers")
+end
+local function isCrouching(char)
+    if not char then return false end
+    local cp = char:FindFirstChild("CollisionPart") or char:FindFirstChild("Collision")
+    if cp then
+        local crouch = cp:FindFirstChild("CollisionCrouch")
+        if crouch then return crouch.CollisionGroup == "PlayerCrouching" end
     end
+    return false
+end
+local function getInjuriesSpeed(hum)
+    if not hum then return 0 end
+    return 0.075 * (hum.MaxHealth - hum.Health)
+end
+local function getCurrentSpeed()
+    local char = getChar()
+    local hum  = getHum()
+    local base = 15
+    if not char or not hum then return base end
+    base += char:GetAttribute("SpeedBoost") or 0
+    base += char:GetAttribute("SpeedBoostBehind") or 0
+    base += char:GetAttribute("SpeedBoostExtra") or 0
+
+    local lm = getLiveModifiers()
+    if lm then
+        if lm:FindFirstChild("PlayerFast")    then base += 3 end
+        if lm:FindFirstChild("PlayerFaster")  then base += 6 end
+        if lm:FindFirstChild("PlayerFastest") then base += 20 end
+        if lm:FindFirstChild("PlayerSlow")    then base -= 3 end
+        if lm:FindFirstChild("PlayerSlowHealth") then base -= getInjuriesSpeed(hum) end
+    end
+
+    if isCrouching(char) then
+        if lm and lm:FindFirstChild("PlayerCrouchSlow") then base -= 8
+        elseif lm and lm:FindFirstChild("PlayerSlow") then base -= 8
+        else base -= 5 end
+    end
+    return base
 end
 
 local function applySpeed()
-    local char = player.Character
-    if not char then return end
-    local root = char:FindFirstChild("HumanoidRootPart")
-    local hum  = char:FindFirstChildOfClass("Humanoid")
-    if not root or not hum then return end
-    hum.WalkSpeed = Config.FAKE_SPEED
-    if not speedState.bv or not speedState.bv.Parent then
-        speedState.bv = Instance.new("BodyVelocity")
-        speedState.bv.MaxForce = Vector3.new(1e5, 0, 1e5)
-        speedState.bv.P = 1e5
-        speedState.bv.Parent = root
-    end
-    root.CustomPhysicalProperties = PhysicalProperties.new(0.7, 0.3, 0.5, 1, 1)
-    if not speedState.loop then
-        speedState.loop = RunService.Heartbeat:Connect(function()
-            if not speedState.enabled then return end
-            local c = player.Character
-            if not c then return end
-            local h = c:FindFirstChildOfClass("Humanoid")
-            if not h or not speedState.bv or not speedState.bv.Parent then return end
-            local md = h.MoveDirection
-            speedState.bv.Velocity = md.Magnitude > 0 and (md * speedState.value) or Vector3.zero
-        end)
-        track(speedState.loop)
-    end
+    if speedState.loop then return end
+    speedState.loop = RunService.Heartbeat:Connect(function()
+        if not speedState.enabled then return end
+        local hum = getHum()
+        if not hum then return end
+        local target = getCurrentSpeed() + speedState.value
+        if math.abs(hum.WalkSpeed - target) > 0.1 then
+            hum.WalkSpeed = target
+        end
+    end)
+    track(speedState.loop)
 end
 
+local function cleanupSpeed()
+    if speedState.loop then speedState.loop:Disconnect() speedState.loop = nil end
+    local hum = getHum()
+    if hum then hum.WalkSpeed = 15 end
+end
+
+-- ============================================================
+--  FOV / FULLBRIGHT (без изменений)
+-- ============================================================
 local function cleanupFOV()
     if fovState.loop then fovState.loop:Disconnect() fovState.loop = nil end
     local cam = workspace.CurrentCamera
     if cam then cam.FieldOfView = Config.FOV_DEFAULT end
 end
-
 local function applyFOV()
     local cam = workspace.CurrentCamera
     if cam then cam.FieldOfView = fovState.value end
@@ -94,7 +123,6 @@ local function applyFullbright()
     Lighting.GlobalShadows  = false
     Lighting.FogEnd         = 100000
 end
-
 local function cleanupFullbright()
     if fbState.saved.saved then
         Lighting.Ambient        = fbState.saved.Ambient
@@ -111,13 +139,13 @@ local function buildUI()
     Group = Hub.Groupboxes.Main_Movement
 
     Group:AddSlider("SpeedValue", {
-        Text = "Speed (16-150)", Min = Config.MIN_SPEED, Max = Config.MAX_SPEED,
-        Default = Config.REAL_SPEED_DEFAULT, Rounding = 0,
-        Callback = function(v) speedState.value = math.floor(v + 0.5) end,
+        Text = "Speed Boost", Min = 0, Max = 135, Default = 0, Rounding = 0,
+        Callback = function(v) speedState.value = math.floor(v) end,
     })
 
     Group:AddToggle("SpeedEnable", {
         Text = "Enable Speed", Default = false,
+        Tooltip = "Обход античита через атрибут SpeedBoost",
         Callback = function(on)
             speedState.enabled = on
             if on then applySpeed() else cleanupSpeed() end
@@ -157,7 +185,10 @@ function Movement.init(hub)
 
     track(player.CharacterAdded:Connect(function()
         task.wait(1)
-        if speedState.enabled then cleanupSpeed() applySpeed() end
+        if speedState.enabled then
+            cleanupSpeed()
+            applySpeed()
+        end
     end))
 
     function Movement.cleanup()
